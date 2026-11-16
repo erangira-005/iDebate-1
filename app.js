@@ -346,6 +346,7 @@
       var em = email.value.trim().toLowerCase(), pw = pass.value, nm = name ? name.value.trim() : '';
       if (!em || !pw) { msg.textContent = 'Enter your email and password.'; return; }
       if (signup && !nm) { msg.textContent = 'Enter your name so the admin knows who you are.'; return; }
+      if (signup && !/^[^\s@]+@[^\s@]+\.[^\s@.]{2,}$/.test(em)) { msg.textContent = 'Enter a full email address, such as name@company.com.'; return; }
       if (signup && pw.length < 8) { msg.textContent = 'Use a password of at least 8 characters.'; return; }
       if (signup && pf2.input.value !== pw) { msg.textContent = 'The two passwords do not match. Tap Show to check them.'; return; }
       go1.disabled = true; msg.textContent = '';
