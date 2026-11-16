@@ -11,9 +11,14 @@
 -- Who can do what
 --   Signed-out visitors   nothing
 --   Signed in, not approved   nothing (they see a "waiting for approval" screen)
---   Approved coach        read all records, add records, edit and delete their own
---   Admin                 everything a coach can, edit or delete anyone's records,
---                         create custom forms, approve people and change roles
+--   Approved coach        sees only the schools an admin has assigned to them (plus any school
+--                         they add themselves, which is assigned to them automatically), and
+--                         everything recorded at those schools: students, sessions, scores.
+--                         Adds records for those schools; edits and deletes their own.
+--                         Custom-form records without a school are visible only to their author.
+--   Admin                 sees everything, edits or deletes anyone's records, creates custom
+--                         forms, approves people, changes roles, assigns schools to coaches,
+--                         and resets passwords
 --   The first account created becomes the admin. Everyone after that needs approval.
 
 
@@ -48,6 +53,77 @@ create index if not exists records_collection_created_idx
 alter table public.records replica identity full;
 
 
+-- 2b. Which coach works at which school ------------------------------------------------
+-- A coach sees a school (and its students, sessions and scores) only if there is a row here.
+-- Admins add and remove rows in the People tab. When a coach adds a school profile, a row for
+-- that coach is added automatically.
+
+do $$
+declare first_run boolean := to_regclass('public.school_access') is null;
+begin
+  create table if not exists public.school_access (
+    school_id  uuid not null references public.records (id) on delete cascade,
+    user_id    uuid not null references public.profiles (id) on delete cascade,
+    created_by uuid default auth.uid() references auth.users (id) on delete set null,
+    created_at timestamptz not null default now(),
+    primary key (school_id, user_id)
+  );
+  if first_run then
+    -- First run only: schools that already exist stay with the coach who created them.
+    insert into public.school_access (school_id, user_id, created_by)
+    select r.id, r.created_by, r.created_by
+    from public.records r
+    join public.profiles p on p.id = r.created_by
+    where r.collection = 'school'
+    on conflict do nothing;
+  end if;
+end
+$$;
+
+create index if not exists school_access_user_idx on public.school_access (user_id);
+
+create or replace function public.school_access_guard()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+begin
+  if not exists (select 1 from public.records r where r.id = new.school_id and r.collection = 'school') then
+    raise exception 'school_id must be a school record' using errcode = '22023';
+  end if;
+  return new;
+end
+$$;
+
+drop trigger if exists school_access_guard on public.school_access;
+create trigger school_access_guard
+  before insert on public.school_access
+  for each row execute function public.school_access_guard();
+
+-- Whoever adds a school profile is assigned to it.
+create or replace function public.records_link_school()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+begin
+  if new.collection = 'school'
+     and new.created_by is not null
+     and exists (select 1 from public.profiles p where p.id = new.created_by) then
+    insert into public.school_access (school_id, user_id, created_by)
+    values (new.id, new.created_by, new.created_by)
+    on conflict do nothing;
+  end if;
+  return null;
+end
+$$;
+
+drop trigger if exists records_link_school on public.records;
+create trigger records_link_school
+  after insert on public.records
+  for each row execute function public.records_link_school();
+
+
 -- 3. Helper functions -------------------------------------------------------------
 -- security definer lets these read profiles without tripping over profiles' own rules.
 
@@ -65,6 +141,39 @@ language sql stable security definer
 set search_path = public
 as $$
   select coalesce((select p.approved and p.role = 'admin' from public.profiles p where p.id = auth.uid()), false)
+$$;
+
+-- Is the signed-in person assigned to this school? (s is the school's id as text)
+create or replace function public.has_school(s text)
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.school_access a
+    where a.user_id = auth.uid() and a.school_id::text = s
+  )
+$$;
+
+-- May the signed-in person save this document? Used by the insert and update rules.
+--   custom form definitions   admins only
+--   school profiles           any approved person (they are assigned to it automatically)
+--   everything else           admins, or a person assigned to the document's school,
+--                             or a document that names no school at all
+create or replace function public.may_write(coll text, doc jsonb)
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select public.is_admin() or (
+    public.is_approved()
+    and coll <> 'formdefs'
+    and (
+      coll = 'school'
+      or (doc -> 'd' ->> 'school') is null
+      or public.has_school(doc -> 'd' ->> 'school')
+    )
+  )
 $$;
 
 -- A harmless call the optional keep-alive workflow uses so the free project is not paused.
@@ -182,30 +291,65 @@ create policy profiles_update on public.profiles
   using (id = auth.uid() or public.is_admin())
   with check (id = auth.uid() or public.is_admin());
 
+-- Reading: admins everything. Approved coaches: custom form definitions, schools assigned to them,
+-- documents belonging to those schools, and their own documents that name no school.
 drop policy if exists records_select on public.records;
 create policy records_select on public.records
   for select to authenticated
-  using (public.is_approved());
+  using (
+    (select public.is_admin())
+    or (
+      (select public.is_approved())
+      and (
+        collection = 'formdefs'
+        or (collection = 'school' and public.has_school(id::text))
+        or (
+          collection not in ('formdefs', 'school')
+          and (
+            public.has_school(data -> 'd' ->> 'school')
+            or (created_by = auth.uid() and (data -> 'd' ->> 'school') is null)
+          )
+        )
+      )
+    )
+  );
 
 drop policy if exists records_insert on public.records;
 create policy records_insert on public.records
   for insert to authenticated
-  with check (public.is_approved() and (collection <> 'formdefs' or public.is_admin()));
+  with check (public.may_write(collection, data));
 
 drop policy if exists records_update on public.records;
 create policy records_update on public.records
   for update to authenticated
-  using (public.is_approved() and (created_by = auth.uid() or public.is_admin()))
-  with check (public.is_approved() and (collection <> 'formdefs' or public.is_admin()));
+  using ((select public.is_approved()) and (created_by = auth.uid() or (select public.is_admin())))
+  with check (public.may_write(collection, data));
 
 drop policy if exists records_delete on public.records;
 create policy records_delete on public.records
   for delete to authenticated
   using (
-    public.is_approved()
-    and (created_by = auth.uid() or public.is_admin())
-    and (collection <> 'formdefs' or public.is_admin())
+    (select public.is_approved())
+    and (created_by = auth.uid() or (select public.is_admin()))
+    and (collection <> 'formdefs' or (select public.is_admin()))
   );
+
+alter table public.school_access enable row level security;
+
+drop policy if exists school_access_select on public.school_access;
+create policy school_access_select on public.school_access
+  for select to authenticated
+  using ((select public.is_admin()) or (user_id = auth.uid() and (select public.is_approved())));
+
+drop policy if exists school_access_insert on public.school_access;
+create policy school_access_insert on public.school_access
+  for insert to authenticated
+  with check ((select public.is_admin()));
+
+drop policy if exists school_access_delete on public.school_access;
+create policy school_access_delete on public.school_access
+  for delete to authenticated
+  using ((select public.is_admin()));
 
 
 -- 6. Privileges -----------------------------------------------------------------------
@@ -214,7 +358,10 @@ create policy records_delete on public.records
 revoke all on public.profiles from anon, authenticated;
 revoke all on public.records  from anon, authenticated;
 
+revoke all on public.school_access from anon, authenticated;
+
 grant select, insert, update, delete on public.records to authenticated;
+grant select, insert, delete on public.school_access to authenticated;
 grant select on public.profiles to authenticated;
 grant update (name, role, approved) on public.profiles to authenticated;
 
@@ -222,6 +369,10 @@ revoke execute on function public.is_approved() from public, anon;
 revoke execute on function public.is_admin()    from public, anon;
 grant  execute on function public.is_approved() to authenticated;
 grant  execute on function public.is_admin()    to authenticated;
+revoke execute on function public.has_school(text)        from public, anon;
+revoke execute on function public.may_write(text, jsonb)   from public, anon;
+grant  execute on function public.has_school(text)        to authenticated;
+grant  execute on function public.may_write(text, jsonb)  to authenticated;
 grant  execute on function public.ping()        to anon, authenticated;
 
 

@@ -52,12 +52,25 @@
     listeners.forEach(function (l) { if (l.name === name) l.load(); });
   }
 
-  function docRef(name, id) {
+  /* A new record is a plain insert; changing an existing one is an update. (Not an "upsert":
+     the database's access rules check an upserted row before the coach has been linked to a
+     brand-new school, which would wrongly refuse it.) */
+  function docRef(name, id, isNew) {
     return {
       id: id,
       set: function (doc) {
-        return sb.from('records').upsert({ id: id, collection: name, data: docToData(doc) }, { onConflict: 'id' })
-          .then(function (r) { if (r.error) throw err(r.error); refresh(name); });
+        var data = docToData(doc);
+        var q = isNew
+          ? sb.from('records').insert({ id: id, collection: name, data: data })
+          : sb.from('records').update({ data: data }).eq('id', id).eq('collection', name).select('id');
+        return q.then(function (r) {
+          // A repeated save of the same new record (double tap) is not an error.
+          if (r.error && !(isNew && String(r.error.code) === '23505')) throw err(r.error);
+          if (!isNew && (!r.data || !r.data.length)) {
+            throw { code: 'not_allowed', message: 'Nothing was saved. You can only change your own records, at schools you are assigned to.' };
+          }
+          refresh(name);
+        });
       },
       delete: function () {
         return sb.from('records').delete().eq('id', id).eq('collection', name).select('id')
@@ -123,14 +136,14 @@
 
   function collection(name) {
     return {
-      doc: function (id) { return docRef(name, id || uuid()); },
-      add: function (doc) { var ref = docRef(name, uuid()); return ref.set(doc).then(function () { return ref; }); },
+      doc: function (id) { return docRef(name, id || uuid(), !id); },
+      add: function (doc) { var ref = docRef(name, uuid(), true); return ref.set(doc).then(function () { return ref; }); },
       onSnapshot: function (next, error) { return listen(name, next, error); }
     };
   }
   function doc(path) {
     var i = path.indexOf('/');
-    return docRef(path.slice(0, i), path.slice(i + 1));
+    return docRef(path.slice(0, i), path.slice(i + 1), false);
   }
 
   /* ---------- people and sign-in ---------- */
@@ -154,6 +167,19 @@
     return sb.from('profiles').update(patch).eq('id', id).select('id').then(function (r) {
       if (r.error) throw err(r.error);
       if (!r.data || !r.data.length) throw { code: 'not_allowed', message: 'Only admins can change this.' };
+    });
+  }
+  // Which coach works at which school (admins manage this; coaches only ever see their own rows).
+  function listAccess() {
+    return sb.from('school_access').select('school_id,user_id')
+      .then(function (r) { if (r.error) throw err(r.error); return r.data || []; });
+  }
+  function setAccess(schoolId, userId, on) {
+    var q = on
+      ? sb.from('school_access').insert({ school_id: schoolId, user_id: userId })
+      : sb.from('school_access').delete().eq('school_id', schoolId).eq('user_id', userId);
+    return q.then(function (r) {
+      if (r.error && !(on && String(r.error.code) === '23505')) throw err(r.error);
     });
   }
   function onAuth(cb) {
@@ -189,6 +215,7 @@
     onAuth: onAuth, getSession: getSession, signIn: signIn, signUp: signUp, signOut: signOut,
     me: me, profiles: profiles, listProfiles: listProfiles, updateProfile: updateProfile,
     changePassword: changePassword, setPassword: setPassword,
+    listAccess: listAccess, setAccess: setAccess,
     collection: collection, doc: doc
   } : { configured: false };
 })();

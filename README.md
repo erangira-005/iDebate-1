@@ -60,8 +60,19 @@ Send them the address. Each coach creates an account (name, email, password of 8
 
 | Who | Can do |
 |---|---|
-| Approved coach | Fill in all forms, see every record, edit or delete their own records, download CSV |
-| Admin | All of the above, plus edit or delete anyone's records, **Build a form**, and manage **People** (approve, make admin, remove access, reset a password) |
+| Approved coach | Fill in all forms for the schools they are assigned to, see everything recorded at those schools, edit or delete their own records, download CSV |
+| Admin | See every school; edit or delete anyone's records; **Build a form**; manage **People** (approve, make admin, remove access, **assign schools**, reset a password) |
+
+### Which school a coach can see
+
+A coach sees only the schools an admin has assigned to them, and everything recorded at those schools (students, sessions, scores), including entries by other coaches there. This is enforced in the database, so it holds even if someone calls the database directly.
+
+- **Assign schools:** People → press **Schools** on a coach → tick the schools they work at. Changes apply straight away (a coach's open page catches up within about 30 seconds or on refresh).
+- **A coach who adds a school profile is assigned to it automatically.** Anyone else working at that school needs to be ticked by an admin.
+- A coach with no school assigned sees an empty app and a message saying so. Their **My schools** tab shows numbers for their schools only, with a filter when there is more than one.
+- **Custom forms** made with Build a form have no school question, so a coach sees only their own entries for them (admins see all). A custom form that does carry a school follows that school's rules.
+- All coaches can still see each other's names and emails (so records can say who entered them), and everyone sees the list of form definitions.
+- **Upgrading an existing database:** running the new `schema.sql` keeps each school visible to the coach who created it. Everyone else loses access until you assign schools in People. Re-running the file later does not undo assignments or removals.
 
 - **Forms**: School profile and Student profile once each; Session report (with a Present / Absent / Excused tap list for the school's students) and Assessment scores each time. "Save and add another" keeps the school selected.
 - **Overview**: attendance rate, pre and post averages and the change, hours delivered, per school and per coach.
@@ -101,7 +112,7 @@ The app stores names, dates of birth, guardian contacts and consent status for s
 - Collect only what you need. If you do not need guardian phone numbers or birth dates, remove those fields from `BUILTIN` in `app.js`.
 - Choose the Supabase region deliberately; it decides where the data physically sits.
 - Keep the admin list short, and use **Remove access** in People when a coach leaves.
-- Everyone you approve can read every record. There is no per-school or per-coach restriction.
+- A coach sees only the schools an admin assigns to them, but admins see everything, so keep the admin list short.
 
 ## Passwords
 
@@ -129,7 +140,7 @@ Edit files directly on GitHub (pencil icon) and commit; the site updates within 
 
 ## How the data is protected
 
-- Only signed-in, approved people can read or write anything. Signed-out and not-yet-approved visitors get nothing from the database.
+- Only signed-in, approved people can read or write anything. Signed-out and not-yet-approved visitors get nothing from the database. Approved coaches reach only their assigned schools.
 - Authors and admins can edit or delete a record; other coaches cannot. Only admins can create custom forms, approve people or change roles. These rules are enforced inside the database (row level security), not just hidden in the page, so they hold even if someone calls the database directly with the public key.
 - The author and timestamps are stamped by the database.
 - The `analysis_*` views obey the same rules as the records they read.
@@ -138,11 +149,11 @@ Edit files directly on GitHub (pencil icon) and commit; the site updates within 
 
 Tested while building this repo:
 
-- `schema.sql` was run in a real PostgreSQL engine (PGlite) with 67 checks: the first account becoming admin, signed-out and unapproved users being refused, people being unable to approve or promote themselves, authorship being stamped on the server, who can edit or delete what, admin-only custom forms, the admin-only password reset (including that the stored value is a bcrypt hash and that non-admins are refused), and the analysis views returning the right numbers under the same access rules.
-- The app screens and flows were run in a simulated browser (113 checks): sign-in and sign-up validation, Show/Hide, the retype box, friendly error messages, the waiting-for-approval screen, approving people, resetting a password, changing your own password, sign-out, adding schools, students, sessions with attendance and assessments with scores, editing, deleting, CSV files, the overview numbers and building a custom form. A mobile-width screenshot of the main screens was reviewed.
-- `backend.js` was tested against a stand-in for the Supabase library (72 checks): record mapping, paging past 1,000 rows, live-update refreshes, error handling, sign-in and sign-up results. The real library file also loads and shows the sign-in screen.
+- `schema.sql` was run in a real PostgreSQL engine (PGlite) with 130 checks: the first account becoming admin, signed-out and unapproved users being refused, people being unable to approve or promote themselves, authorship being stamped on the server, who can edit or delete what, coaches seeing and changing only their assigned schools (records, views, custom forms), admins alone assigning schools, upgrading a database that already holds data, admin-only custom forms, the admin-only password reset (including that the stored value is a bcrypt hash and that non-admins are refused), and the analysis views returning the right numbers under the same access rules.
+- The app screens and flows were run in a simulated browser (140 checks): sign-in and sign-up validation, Show/Hide, the retype box, friendly error messages, the waiting-for-approval screen, approving people, resetting a password, changing your own password, assigning schools and the coach's school-only view, sign-out, adding schools, students, sessions with attendance and assessments with scores, editing, deleting, CSV files, the overview numbers and building a custom form. A mobile-width screenshot of the main screens was reviewed.
+- `backend.js` was tested against a stand-in for the Supabase library (85 checks): record mapping, paging past 1,000 rows, live-update refreshes, error handling, sign-in and sign-up results. The real library file also loads and shows the sign-in screen.
 
-Not tested: a real, live Supabase project. In particular, I could not confirm against the real sign-in service that a password set by an admin through `admin_set_password` is accepted at sign-in; try it once on a test account. The sign-in service, the live-update connection, the email settings and the dashboard menus were not run end to end, because that needs your own project. Expect to spend a few minutes on first setup double-checking those; if something does not work, the browser's developer console (F12) usually names the cause.
+Not tested: a real, live Supabase project. In particular, I could not confirm against the real sign-in service that a password set by an admin through `admin_set_password` is accepted at sign-in; try it once on a test account. Likewise, school-by-school access was checked in a real Postgres engine, but not through Supabase's own data service: after upgrading, check once that a test coach can add a school profile and then see it. The sign-in service, the live-update connection, the email settings and the dashboard menus were not run end to end, because that needs your own project. Expect to spend a few minutes on first setup double-checking those; if something does not work, the browser's developer console (F12) usually names the cause.
 
 ## Licence
 

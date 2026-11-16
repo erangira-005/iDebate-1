@@ -217,7 +217,8 @@
   }
   function go(tab, screen) {
     S.tab = tab; S.screen = screen || null; S.built = false;
-    S.resetFor = null; S.resetDone = null;
+    S.resetFor = null; S.resetDone = null; S.schoolsFor = null;
+    if (tab === 'people' && S.admin) { S.peopleLoading = false; loadPeople(); } // pick up new sign-ups and assignments
     if (!screen || screen.kind !== 'fill') S.values = {};
     S.filter = '';
     render();
@@ -244,7 +245,7 @@
     var nav = $('#tabs');
     nav.replaceChildren();
     if (S.auth === 'in') {
-      var tabs = [['forms', 'Forms'], ['overview', 'Overview']];
+      var tabs = [['forms', 'Forms'], ['overview', S.admin ? 'Overview' : 'My schools']];
       if (S.admin) {
         tabs.push(['build', 'Build a form']);
         var waiting = (S.people || []).filter(function (p) { return !p.approved; }).length;
@@ -421,6 +422,13 @@
     Promise.resolve(Backend.listProfiles()).then(function (rows) {
       S.people = rows || []; S.peopleLoading = false; scheduleRender();
     }, function () { S.people = S.people || []; S.peopleLoading = false; scheduleRender(); });
+    if (Backend.listAccess) {
+      Promise.resolve(Backend.listAccess()).then(function (rows) {
+        S.access = {};
+        (rows || []).forEach(function (r) { (S.access[r.user_id] = S.access[r.user_id] || {})[r.school_id] = true; });
+        S.accessErr = null; scheduleRender();
+      }, function (e) { S.access = S.access || {}; S.accessErr = (e && e.code) || 'error'; scheduleRender(); });
+    }
   }
   function setProfile(p, patch) {
     Promise.resolve(Backend.updateProfile(p.id, patch)).then(function () {
@@ -477,12 +485,60 @@
       h('div', { class: 'row' }, go1, h('button', { type: 'button', class: 'btn', onclick: closeReset, text: 'Cancel' })));
   }
 
+  /* Admin: which schools does each coach work at? */
+  function schoolName(id) { var r = getRec('school', id); return r ? (r.d.school_name || 'Unnamed school') : null; }
+  function assignedIds(userId) { return Object.keys((S.access && S.access[userId]) || {}).filter(function (id) { return !!getRec('school', id); }); }
+  function schoolsText(p) {
+    if (p.role === 'admin') return 'Sees every school.';
+    if (S.accessErr) return 'Schools could not be loaded (' + S.accessErr + '). Run the latest schema.sql in Supabase (README).';
+    if (!S.access) return 'Loading schools…';
+    var ids = assignedIds(p.id);
+    if (!ids.length) return 'No schools assigned. They cannot see any school data yet.';
+    var names = ids.map(schoolName).sort();
+    return (ids.length === 1 ? '1 school: ' : ids.length + ' schools: ') + (ids.length <= 3 ? names.join(', ') : names.slice(0, 3).join(', ') + ' and ' + (ids.length - 3) + ' more') + '.';
+  }
+  function openSchools(p) { S.schoolsFor = p.id; S.resetFor = null; S.resetDone = null; S.built = false; render(); }
+  function closeSchools() { S.schoolsFor = null; S.built = false; render(); }
+  function accessError(e) {
+    var code = e && e.code;
+    if (code === '42P01' || code === 'PGRST205') return 'The database does not have school assignments yet. Run the latest schema.sql in the Supabase SQL Editor (README).';
+    if (code === '42501') return 'Only admins can change this.';
+    return 'Could not change this (' + (code || 'error') + ').';
+  }
+  function schoolsPanel(p, summary) {
+    if (S.schoolsFor !== p.id) return null;
+    var schools = list('school').map(function (sc) { return { id: sc.id, name: sc.d.school_name || 'Unnamed school' }; })
+      .sort(function (a, b) { return a.name.localeCompare(b.name); });
+    var box = h('div', { class: 'stack-s' }, h('div', { class: 'lbl', text: 'Schools ' + (p.name || p.email || 'this person') + ' works at' }));
+    var err = h('p', { class: 'err', role: 'alert' });
+    if (!schools.length) box.append(h('p', { class: 'hint', text: 'No schools yet. Schools appear here once someone adds a school profile.' }));
+    schools.forEach(function (sc) {
+      var cb = h('input', { type: 'checkbox', id: 'sch-' + p.id + '-' + sc.id });
+      cb.checked = !!(S.access && S.access[p.id] && S.access[p.id][sc.id]);
+      cb.addEventListener('change', function () {
+        var on = cb.checked;
+        cb.disabled = true; err.textContent = '';
+        Promise.resolve(Backend.setAccess(sc.id, p.id, on)).then(function () {
+          S.access = S.access || {};
+          var mine = S.access[p.id] = S.access[p.id] || {};
+          if (on) mine[sc.id] = true; else delete mine[sc.id];
+          cb.disabled = false;
+          summary.textContent = schoolsText(p);
+          toast(on ? 'Assigned to ' + sc.name : 'Removed from ' + sc.name);
+        }, function (e) { cb.checked = !on; cb.disabled = false; err.textContent = accessError(e); });
+      });
+      box.append(h('label', { class: 'check', for: cb.id }, cb, h('span', { text: sc.name })));
+    });
+    box.append(err, h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: closeSchools, text: 'Done' })));
+    return box;
+  }
+
   function screenPeople() {
     var box = h('div', { class: 'stack' });
-    S.built = !!(S.resetFor || S.resetDone); // keep a half-typed temporary password when live data refreshes
+    S.built = !!(S.resetFor || S.resetDone || S.schoolsFor); // keep a half-typed temporary password or open school list when live data refreshes
     box.append(h('div', { class: 'card stack-s' },
       h('h2', { text: 'People' }),
-      h('p', { class: 'hint', text: 'New accounts wait here until you approve them. Approved coaches can read every record and add their own. Admins can also edit anyone’s records and build forms.' })));
+      h('p', { class: 'hint', text: 'New accounts wait here until you approve them. An approved coach sees only the schools you assign with Schools (plus any school they add themselves), and adds and edits their own records there. Admins see everything, edit anyone’s records and build forms.' })));
     if (!S.people) { loadPeople(); box.append(h('p', { class: 'hint', text: 'Loading…' })); return box; }
     var rows = S.people.slice().sort(function (a, b) {
       return (a.approved === b.approved ? 0 : a.approved ? 1 : -1) || String(a.name || a.email).localeCompare(String(b.name || b.email));
@@ -498,11 +554,15 @@
           h('button', { type: 'button', class: 'btn', onclick: function () { setProfile(p, { role: p.role === 'admin' ? 'coach' : 'admin' }); }, text: p.role === 'admin' ? 'Make coach' : 'Make admin' }),
           h('button', { type: 'button', class: 'btn danger', onclick: function () { setProfile(p, { approved: false }); }, text: 'Remove access' }));
       }
+      if (!me && p.approved && p.role !== 'admin') actions.append(h('button', { type: 'button', class: 'btn', onclick: function () { openSchools(p); }, text: 'Schools' }));
       if (!me) actions.append(h('button', { type: 'button', class: 'btn', onclick: function () { openReset(p); }, text: 'Reset password' }));
+      var summary = p.approved && !me ? h('div', { class: 'rec-s', id: 'sch-sum-' + p.id, text: schoolsText(p) }) : null;
       box.append(h('div', { class: 'card stack-s' },
         h('div', {}, h('div', { class: 'rec-t', text: p.name || p.email || 'Unnamed' }), h('div', { class: 'rec-s', text: p.email || '' })),
         h('div', { class: 'fc-count', text: status + (me ? ' (you)' : '') }),
+        summary,
         actions.childNodes.length ? actions : null,
+        summary ? schoolsPanel(p, summary) : null,
         resetPanel(p)));
     });
     return box;
@@ -520,7 +580,9 @@
   function screenHome() {
     var box = h('div', { class: 'stack' });
     if (S.loaded.school && !list('school').length) {
-      box.append(h('div', { class: 'banner', text: 'Start here. Add a school profile, then the students at that school. After that, coaches can file session reports and scores.' }));
+      box.append(h('div', { class: 'banner', text: S.admin
+        ? 'Start here. Add a school profile, then the students at that school. After that, coaches can file session reports and scores.'
+        : 'You are not linked to a school yet. Add a school profile below and you will be linked to it automatically, or ask your admin to assign you to your school.' }));
     }
     [['once', 'Set up once'], ['every', 'Every session'], ['custom', 'Custom forms']].forEach(function (g) {
       var fs = allForms().filter(function (f) { return f.group === g[0]; });
@@ -728,7 +790,7 @@
           }
         });
       });
-      if (!opts.length) wrap.append(h('p', { class: 'hint', text: 'Add a ' + f.of + ' profile first.' }));
+      if (!opts.length) wrap.append(h('p', { class: 'hint', text: 'Add a ' + f.of + ' profile first' + (f.of === 'school' && !S.admin ? ', or ask your admin to assign you to your school.' : '.') }));
     } else if (f.type === 'roster') {
       ctl = h('div', { id: 'roster-' + f.key });
       wrap.append(ctl);
@@ -966,15 +1028,17 @@
   }
 
   /* ---------- overview ---------- */
-  function analyse() {
+  function analyse(only) {
     var rows = new Map();
-    list('school').forEach(function (s) {
+    var scoped = function (rec) { return !only || rec.d.school === only; };
+    var students = list('student').filter(scoped), sessions = list('session').filter(scoped), assessments = list('assessment').filter(scoped);
+    list('school').filter(function (s) { return !only || s.id === only; }).forEach(function (s) {
       rows.set(s.id, { id: s.id, name: s.d.school_name || 'Unnamed school', students: 0, sessions: 0, hours: 0, att: 0, present: 0, pre: 0, preMax: 0, post: 0, postMax: 0 });
     });
-    var t = { students: list('student').length, sessions: list('session').length, hours: 0, att: 0, present: 0, pre: 0, preMax: 0, post: 0, postMax: 0 };
+    var t = { students: students.length, sessions: sessions.length, hours: 0, att: 0, present: 0, pre: 0, preMax: 0, post: 0, postMax: 0 };
     var coaches = new Map();
-    list('student').forEach(function (s) { var r = rows.get(s.d.school); if (r) r.students++; });
-    list('session').forEach(function (se) {
+    students.forEach(function (s) { var r = rows.get(s.d.school); if (r) r.students++; });
+    sessions.forEach(function (se) {
       var r = rows.get(se.d.school);
       var hrs = (Number(se.d.duration_minutes) || 0) / 60;
       t.hours += hrs;
@@ -990,7 +1054,7 @@
         if (r) { r.att++; if (present) r.present++; }
       });
     });
-    list('assessment').forEach(function (a) {
+    assessments.forEach(function (a) {
       var k = a.d.assessment_type === 'Pre' ? 'pre' : a.d.assessment_type === 'Post' ? 'post' : null;
       if (!k) return;
       var r = rows.get(a.d.school);
@@ -1023,9 +1087,27 @@
       h('tbody', {}, rows.map(function (r) { return h('tr', {}, r.map(function (c) { return h('td', { text: c }); })); }))));
   }
   function screenOverview() {
-    var a = analyse(), t = a.total;
+    if (S.ovSchool && !getRec('school', S.ovSchool)) S.ovSchool = '';
+    var a = analyse(S.ovSchool || null), t = a.total;
     loadNames(a.coaches.map(function (c) { return c.id; }));
     var box = h('div', { class: 'stack' });
+    var mine = list('school').map(function (sc) { return [sc.id, sc.d.school_name || 'Unnamed school']; })
+      .sort(function (x, y) { return x[1].localeCompare(y[1]); });
+    if (S.admin) {
+      box.append(h('p', { class: 'hint', text: 'Every school, across all coaches.' }));
+    } else if (!mine.length) {
+      box.append(h('div', { class: 'banner', text: 'You are not linked to a school yet. Add a school profile under Forms and you will be linked to it, or ask your admin to assign you to your school.' }));
+    } else {
+      box.append(h('p', { class: 'hint', text: 'Only the ' + (mine.length === 1 ? 'school you work at' : 'schools you work at') + ' are shown: ' + mine.map(function (m) { return m[1]; }).join(', ') + '.' }));
+    }
+    if (mine.length > 1) {
+      var pick = h('select', { id: 'ov-school', 'aria-label': 'School' },
+        h('option', { value: '', text: S.admin ? 'All schools' : 'All my schools' }),
+        mine.map(function (m) { return h('option', { value: m[0], text: m[1] }); }));
+      pick.value = S.ovSchool || '';
+      pick.addEventListener('change', function () { S.ovSchool = pick.value; render(); });
+      box.append(h('div', { class: 'field' }, h('label', { class: 'lbl', for: 'ov-school', text: 'Show' }), pick));
+    }
     box.append(h('div', { class: 'tiles' },
       tile('Schools', String(a.rows.length)),
       tile('Students', String(t.students)),
@@ -1159,7 +1241,7 @@
     S.tab = 'forms'; S.screen = null; S.values = {}; S.built = false; S.saving = false;
     S.data = {}; S.idx = {}; S.loaded = {}; S.subs = {}; S.subErr = {}; S.names = {}; S.custom = []; S.formsCache = null;
     S.filter = ''; S.slow = false; S.people = null; S.peopleLoading = false;
-    S.resetFor = null; S.resetPw = ''; S.resetDone = null;
+    S.resetFor = null; S.resetPw = ''; S.resetDone = null; S.schoolsFor = null; S.access = null; S.accessErr = null; S.ovSchool = '';
   }
   function loadProfile(session) {
     S.auth = 'loading'; S.loadingFor = session.user.id; render();
