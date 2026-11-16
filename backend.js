@@ -173,11 +173,22 @@
       });
   }
   function signOut() { return sb.auth.signOut(); }
+  // Signed-in person chooses a new password for themselves.
+  function changePassword(password) {
+    return sb.auth.updateUser({ password: password })
+      .then(function (r) { return { error: r.error ? r.error.message : null }; });
+  }
+  // An admin sets a temporary password for someone else (needs the admin_set_password function from schema.sql).
+  function setPassword(id, password) {
+    return sb.rpc('admin_set_password', { target: id, new_password: password })
+      .then(function (r) { if (r.error) throw err(r.error); });
+  }
 
   window.Backend = configured ? {
     configured: true,
     onAuth: onAuth, getSession: getSession, signIn: signIn, signUp: signUp, signOut: signOut,
     me: me, profiles: profiles, listProfiles: listProfiles, updateProfile: updateProfile,
+    changePassword: changePassword, setPassword: setPassword,
     collection: collection, doc: doc
   } : { configured: false };
 })();

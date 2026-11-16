@@ -24,7 +24,7 @@ You will do four things: create a Supabase project, paste two values into `confi
 
 Open **Authentication → Sign In / Providers → Email**.
 
-- **Confirm email**: with it on, new people must click a link in an email before they can sign in. Supabase's built-in email sender is only meant for light testing and is heavily rate-limited, so for a small team the simplest choice is to **turn it off**. Admin approval (below) is the real gate either way. If you keep it on, also set **Authentication → URL Configuration → Site URL** to your Pages address from step 4.
+- **Confirm email**: with it on, new people must click a link in an email before they can sign in. Supabase's built-in email sender only delivers to addresses on your own Supabase team and is capped at about 2 emails an hour, so without your own email service (custom SMTP) your coaches would never receive the link. For a small team the simple choice is to **turn it off**. Admin approval (below) is the real gate either way. If you set up custom SMTP and keep it on, also set **Authentication → URL Configuration → Site URL** to your Pages address from step 4.
 - **Allow new users to sign up**: leave it on if coaches will create their own accounts. If you would rather add everyone yourself, turn it off and use **Authentication → Users → Add user**. They still need approval in the app's People tab.
 
 Menu names move around now and then; the setting names above are what to look for.
@@ -61,7 +61,7 @@ Send them the address. Each coach creates an account (name, email, password of 8
 | Who | Can do |
 |---|---|
 | Approved coach | Fill in all forms, see every record, edit or delete their own records, download CSV |
-| Admin | All of the above, plus edit or delete anyone's records, **Build a form**, and manage **People** (approve, make admin, remove access) |
+| Admin | All of the above, plus edit or delete anyone's records, **Build a form**, and manage **People** (approve, make admin, remove access, reset a password) |
 
 - **Forms**: School profile and Student profile once each; Session report (with a Present / Absent / Excused tap list for the school's students) and Assessment scores each time. "Save and add another" keeps the school selected.
 - **Overview**: attendance rate, pre and post averages and the change, hours delivered, per school and per coach.
@@ -103,17 +103,13 @@ The app stores names, dates of birth, guardian contacts and consent status for s
 - Keep the admin list short, and use **Remove access** in People when a coach leaves.
 - Everyone you approve can read every record. There is no per-school or per-coach restriction.
 
-## Forgotten passwords
+## Passwords
 
-There is no "forgot password" screen yet. Until one is added, an admin can set a new password in the Supabase **SQL Editor**:
-
-```sql
-update auth.users
-set encrypted_password = extensions.crypt('a-new-password', extensions.gen_salt('bf'))
-where email = 'coach@example.org';
-```
-
-Send the coach the new password and ask them to keep it private. (I could not run this against a live Supabase project while preparing the repo, so try it on a test account first.) Do not delete the user instead: that would detach their records from their name.
+- **Show / Hide.** Every password box has a Show button so people can check what they typed, and sign-up asks for the password twice. Emails are lower-cased and trimmed automatically.
+- **Change your own password.** Signed-in people tap **Password** at the top of the page.
+- **Forgot your password.** The sign-in screen says to ask an admin. The admin opens **People**, presses **Reset password** next to the person's name, and gives them the temporary password shown (the app suggests a random one; the admin can type their own). The person signs in and chooses their own under **Password**. This works without any email, which matters because Supabase's built-in email cannot reach your coaches (see step 2).
+- **If someone gets "That email and password do not match an account".** That message comes from the sign-in service and appears before approval is checked, so approval is not the cause. The usual causes are a mistyped email, or a password that is not what the person thinks they typed when they signed up (it was hidden). Have them tap Show, and if it still fails, reset their password from People. In Supabase, **Authentication → Users** shows whether the account exists, and **Authentication → Logs** shows the exact reason for each failed sign-in.
+- Resetting needs the `admin_set_password` function from the latest `schema.sql`. If you see "Run the latest schema.sql", paste the file into the SQL Editor again and run it; running it twice is harmless.
 
 ## Updating the app
 
@@ -142,11 +138,11 @@ Edit files directly on GitHub (pencil icon) and commit; the site updates within 
 
 Tested while building this repo:
 
-- `schema.sql` was run in a real PostgreSQL engine (PGlite) with 49 checks: the first account becoming admin, signed-out and unapproved users being refused, people being unable to approve or promote themselves, authorship being stamped on the server, who can edit or delete what, admin-only custom forms, and the analysis views returning the right numbers under the same access rules.
-- The app screens and flows were run in a simulated browser (70 checks): sign-in and sign-up validation, the waiting-for-approval screen, approving people, sign-out, adding schools, students, sessions with attendance and assessments with scores, editing, deleting, CSV files, the overview numbers and building a custom form. A mobile-width screenshot of the main screens was reviewed.
-- `backend.js` was tested against a stand-in for the Supabase library (67 checks): record mapping, paging past 1,000 rows, live-update refreshes, error handling, sign-in and sign-up results. The real library file also loads and shows the sign-in screen.
+- `schema.sql` was run in a real PostgreSQL engine (PGlite) with 67 checks: the first account becoming admin, signed-out and unapproved users being refused, people being unable to approve or promote themselves, authorship being stamped on the server, who can edit or delete what, admin-only custom forms, the admin-only password reset (including that the stored value is a bcrypt hash and that non-admins are refused), and the analysis views returning the right numbers under the same access rules.
+- The app screens and flows were run in a simulated browser (113 checks): sign-in and sign-up validation, Show/Hide, the retype box, friendly error messages, the waiting-for-approval screen, approving people, resetting a password, changing your own password, sign-out, adding schools, students, sessions with attendance and assessments with scores, editing, deleting, CSV files, the overview numbers and building a custom form. A mobile-width screenshot of the main screens was reviewed.
+- `backend.js` was tested against a stand-in for the Supabase library (72 checks): record mapping, paging past 1,000 rows, live-update refreshes, error handling, sign-in and sign-up results. The real library file also loads and shows the sign-in screen.
 
-Not tested: a real, live Supabase project. The sign-in service, the live-update connection, the email settings and the dashboard menus were not run end to end, because that needs your own project. Expect to spend a few minutes on first setup double-checking those; if something does not work, the browser's developer console (F12) usually names the cause.
+Not tested: a real, live Supabase project. In particular, I could not confirm against the real sign-in service that a password set by an admin through `admin_set_password` is accepted at sign-in; try it once on a test account. The sign-in service, the live-update connection, the email settings and the dashboard menus were not run end to end, because that needs your own project. Expect to spend a few minutes on first setup double-checking those; if something does not work, the browser's developer console (F12) usually names the cause.
 
 ## Licence
 

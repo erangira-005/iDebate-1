@@ -217,6 +217,7 @@
   }
   function go(tab, screen) {
     S.tab = tab; S.screen = screen || null; S.built = false;
+    S.resetFor = null; S.resetDone = null;
     if (!screen || screen.kind !== 'fill') S.values = {};
     S.filter = '';
     render();
@@ -234,9 +235,11 @@
     var who = $('#who');
     who.replaceChildren();
     if (S.auth === 'in' || S.auth === 'pending') {
-      who.append(
+      [
         S.meName ? h('span', { text: S.meName + (S.admin ? ' · admin' : '') }) : null,
-        h('button', { type: 'button', class: 'linkbtn', onclick: signOut, text: 'Sign out' }));
+        S.auth === 'in' ? h('button', { type: 'button', class: 'linkbtn', onclick: function () { go('account', null); }, text: 'Password' }) : null,
+        h('button', { type: 'button', class: 'linkbtn', onclick: signOut, text: 'Sign out' })
+      ].forEach(function (el) { if (el) who.append(el); });
     }
     var nav = $('#tabs');
     nav.replaceChildren();
@@ -267,9 +270,11 @@
     if (S.auth === 'out') { main.replaceChildren(screenLogin()); return; }
     if (S.auth === 'pending') { main.replaceChildren(screenPending()); return; }
     if (S.screen && S.screen.kind === 'fill' && S.built) return;
+    if ((S.tab === 'account' || S.tab === 'people') && S.built) return;
     var view;
     try {
       if (S.tab === 'overview') view = screenOverview();
+      else if (S.tab === 'account') view = screenAccount();
       else if (S.tab === 'people' && S.admin) view = screenPeople();
       else if (S.tab === 'build' && S.admin) view = screenBuild();
       else if (S.screen && S.screen.kind === 'list') view = screenList();
@@ -291,6 +296,31 @@
       h('p', { class: 'hint', text: 'The README walks through it, starting with creating the Supabase project.' }));
   }
 
+  /* A password box with a Show / Hide button, so people can check what they typed. */
+  function pwField(id, auto) {
+    var input = h('input', { class: 'inp', id: id, type: 'password', autocomplete: auto, autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false' });
+    var btn = h('button', { type: 'button', class: 'btn pwshow', 'aria-pressed': 'false', 'aria-label': 'Show password', text: 'Show' });
+    btn.addEventListener('click', function () {
+      var shown = input.type === 'text';
+      input.type = shown ? 'password' : 'text';
+      btn.textContent = shown ? 'Show' : 'Hide';
+      btn.setAttribute('aria-pressed', shown ? 'false' : 'true');
+      btn.setAttribute('aria-label', shown ? 'Show password' : 'Hide password');
+    });
+    return { input: input, box: h('div', { class: 'pwrow' }, input, btn) };
+  }
+
+  /* Supabase's messages are short and technical; say what to do about them. */
+  function friendlyAuthError(msg) {
+    var m = String(msg || '');
+    if (/invalid login credentials/i.test(m)) return 'That email and password do not match an account. Check the email, tap Show to check the password (capital letters count) and try again. If it keeps failing, ask your admin to reset your password.';
+    if (/email not confirmed/i.test(m)) return 'This account’s email has not been confirmed, so it cannot sign in yet. Ask your admin for help (README, step 2).';
+    if (/already registered|already been registered/i.test(m)) return 'That email already has an account. Tap “I already have an account” to sign in, or ask your admin to reset the password.';
+    if (/rate limit|too many/i.test(m)) return 'Too many attempts. Wait a few minutes and try again.';
+    if (/not authorized|error sending|sending .*email/i.test(m)) return 'The confirmation email could not be sent. Ask your admin to turn off “Confirm email” in Supabase (README, step 2).';
+    return m || 'Something went wrong. Try again.';
+  }
+
   function screenLogin() {
     var signup = S.authMode === 'up';
     var form = h('form', { class: 'stack-s', novalidate: true });
@@ -300,24 +330,31 @@
       name = h('input', { class: 'inp', id: 'a-name', type: 'text', autocomplete: 'name' });
       form.append(h('div', { class: 'field' }, h('label', { class: 'lbl', for: 'a-name', text: 'Your name' }), name));
     }
-    var email = h('input', { class: 'inp', id: 'a-email', type: 'email', autocomplete: 'username', inputmode: 'email' });
-    var pass = h('input', { class: 'inp', id: 'a-pass', type: 'password', autocomplete: signup ? 'new-password' : 'current-password' });
+    var email = h('input', { class: 'inp', id: 'a-email', type: 'email', autocomplete: 'username', inputmode: 'email', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false' });
+    var pf = pwField('a-pass', signup ? 'new-password' : 'current-password');
+    var pass = pf.input;
+    var pf2 = signup ? pwField('a-pass2', 'new-password') : null;
     var go1 = h('button', { type: 'submit', class: 'btn primary', id: 'a-go', text: signup ? 'Create account' : 'Sign in' });
     form.append(
       h('div', { class: 'field' }, h('label', { class: 'lbl', for: 'a-email', text: 'Email' }), email),
-      h('div', { class: 'field' }, h('label', { class: 'lbl', for: 'a-pass', text: signup ? 'Password (at least 8 characters)' : 'Password' }), pass),
-      msg, go1);
+      h('div', { class: 'field' }, h('label', { class: 'lbl', for: 'a-pass', text: signup ? 'Password (at least 8 characters)' : 'Password' }), pf.box));
+    if (pf2) form.append(h('div', { class: 'field' }, h('label', { class: 'lbl', for: 'a-pass2', text: 'Type the password again' }), pf2.box));
+    form.append(msg, go1);
     form.addEventListener('submit', function (e) {
       e.preventDefault();
-      var em = email.value.trim(), pw = pass.value, nm = name ? name.value.trim() : '';
+      var em = email.value.trim().toLowerCase(), pw = pass.value, nm = name ? name.value.trim() : '';
       if (!em || !pw) { msg.textContent = 'Enter your email and password.'; return; }
       if (signup && !nm) { msg.textContent = 'Enter your name so the admin knows who you are.'; return; }
       if (signup && pw.length < 8) { msg.textContent = 'Use a password of at least 8 characters.'; return; }
+      if (signup && pf2.input.value !== pw) { msg.textContent = 'The two passwords do not match. Tap Show to check them.'; return; }
       go1.disabled = true; msg.textContent = '';
       var call = signup ? Backend.signUp(em, pw, nm) : Backend.signIn(em, pw);
       Promise.resolve(call).then(function (res) {
         go1.disabled = false;
-        if (res && res.error) { S.authMsg = res.error; msg.textContent = res.error; return; }
+        if (res && res.error) {
+          if (window.console) console.warn('Sign-in problem reported by the server:', res.error);
+          S.authMsg = friendlyAuthError(res.error); msg.textContent = S.authMsg; return;
+        }
         if (res && res.needsConfirm) {
           S.authMode = 'in';
           S.authMsg = 'Account created. Check your email for a confirmation link, then sign in.';
@@ -326,12 +363,48 @@
       }, function () { go1.disabled = false; msg.textContent = 'Could not reach the server. Check your connection and try again.'; });
     });
     var toggle = h('button', { type: 'button', class: 'btn', onclick: function () { S.authMode = signup ? 'in' : 'up'; S.authMsg = ''; render(); }, text: signup ? 'I already have an account' : 'Create an account' });
+    var forgot = signup ? null : h('details', { class: 'forgot' },
+      h('summary', { text: 'Forgot your password?' }),
+      h('p', { class: 'hint', text: 'Ask your admin to reset it. They open the People tab, press Reset password next to your name and give you a temporary password. After you sign in, tap Password at the top to choose your own.' }));
     return h('div', { class: 'stack' },
       h('div', { class: 'card stack-s' },
         h('h2', { text: signup ? 'Create your account' : 'Sign in' }),
         h('p', { class: 'hint', text: signup ? 'An admin has to approve new accounts before you can see or add records.' : 'Use the email and password you registered with.' }),
-        form),
+        form, forgot),
       toggle);
+  }
+
+  /* Signed-in people choose a new password here (also used after an admin set a temporary one). */
+  function screenAccount() {
+    S.built = true; // keep what is typed when live data refreshes the page
+    var msg = h('p', { class: 'err', id: 'c-err', role: 'alert' });
+    var done = h('p', { class: 'hint', id: 'c-done', role: 'status' });
+    var p1 = pwField('c-pass', 'new-password'), p2 = pwField('c-pass2', 'new-password');
+    var go1 = h('button', { type: 'submit', class: 'btn primary', id: 'c-go', text: 'Change password' });
+    var form = h('form', { class: 'stack-s', novalidate: true },
+      h('div', { class: 'field' }, h('label', { class: 'lbl', for: 'c-pass', text: 'New password (at least 8 characters)' }), p1.box),
+      h('div', { class: 'field' }, h('label', { class: 'lbl', for: 'c-pass2', text: 'Type it again' }), p2.box),
+      msg, done, go1);
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      msg.textContent = ''; done.textContent = '';
+      var a = p1.input.value, b = p2.input.value;
+      if (a.length < 8) { msg.textContent = 'Use a password of at least 8 characters.'; return; }
+      if (a !== b) { msg.textContent = 'The two passwords do not match. Tap Show to check them.'; return; }
+      go1.disabled = true;
+      Promise.resolve(Backend.changePassword(a)).then(function (res) {
+        go1.disabled = false;
+        if (res && res.error) { msg.textContent = friendlyAuthError(res.error); return; }
+        p1.input.value = ''; p2.input.value = '';
+        done.textContent = 'Your password has been changed. Use the new one next time you sign in.';
+        toast('Password changed');
+      }, function () { go1.disabled = false; msg.textContent = 'Could not reach the server. Try again.'; });
+    });
+    return h('div', { class: 'stack' },
+      head('Password', function () { go('forms', null); }, 'Forms'),
+      h('div', { class: 'card stack-s' },
+        h('p', { class: 'hint', text: 'Signed in as ' + ((S.profile && S.profile.email) || 'you') + '.' }),
+        form));
   }
 
   function screenPending() {
@@ -351,11 +424,62 @@
   }
   function setProfile(p, patch) {
     Promise.resolve(Backend.updateProfile(p.id, patch)).then(function () {
-      toast('Updated'); S.peopleLoading = false; loadPeople();
+      toast('Updated'); S.peopleLoading = false; S.built = false; loadPeople();
     }, function (e) { toast('Could not update (' + ((e && e.code) || 'error') + ')'); });
   }
+  /* Admin sets a temporary password for someone who is locked out. */
+  function tempPassword() {
+    var abc = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789', out = '', i;
+    var buf = new Uint8Array(32);
+    if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(buf);
+    else for (i = 0; i < buf.length; i++) buf[i] = Math.floor(Math.random() * 256);
+    for (i = 0; i < buf.length && out.length < 10; i++) if (buf[i] < 216) out += abc.charAt(buf[i] % 54);
+    while (out.length < 10) out += abc.charAt(Math.floor(Math.random() * 54));
+    return out;
+  }
+  function resetError(e) {
+    var code = e && e.code, m = (e && e.message) || '';
+    if (code === 'PGRST202' || /could not find the function/i.test(m)) return 'The database does not have the password-reset function yet. Run the latest schema.sql in the Supabase SQL Editor (README), then try again.';
+    if (code === '42501') return 'Only admins can reset passwords.';
+    if (code === '22023') return m;
+    if (code === 'P0002') return 'That account no longer exists.';
+    return 'Could not reset the password (' + (code || 'error') + ').';
+  }
+  function openReset(p) { S.resetFor = p.id; S.resetPw = tempPassword(); S.resetDone = null; S.built = false; render(); }
+  function closeReset() { S.resetFor = null; S.resetPw = ''; S.resetDone = null; S.built = false; render(); }
+  function resetPanel(p) {
+    var who = p.name || p.email || 'this person';
+    if (S.resetDone && S.resetDone.id === p.id) {
+      return h('div', { class: 'banner', role: 'status' },
+        h('p', { text: 'Password set for ' + who + '. Give them this temporary password:' }),
+        h('p', { class: 'temp-pw', id: 'r-shown', text: S.resetDone.pw }),
+        h('p', { class: 'hint', text: 'Ask them to sign in and tap Password at the top to choose their own. It is not shown again.' }),
+        h('button', { type: 'button', class: 'btn', onclick: closeReset, text: 'Done' }));
+    }
+    if (S.resetFor !== p.id) return null;
+    var input = h('input', { class: 'inp', id: 'r-pw', type: 'text', value: S.resetPw, autocomplete: 'off', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false' });
+    input.addEventListener('input', function () { S.resetPw = input.value; });
+    var err = h('p', { class: 'err', id: 'r-err', role: 'alert' });
+    var go1 = h('button', { type: 'button', class: 'btn primary', id: 'r-go', text: 'Set password' });
+    go1.addEventListener('click', function () {
+      var pw = input.value;
+      err.textContent = '';
+      if (pw.length < 8) { err.textContent = 'Use at least 8 characters.'; return; }
+      if (pw !== pw.trim()) { err.textContent = 'Remove the spaces at the start or end.'; return; }
+      go1.disabled = true;
+      Promise.resolve(Backend.setPassword(p.id, pw)).then(function () {
+        S.resetDone = { id: p.id, pw: pw }; S.resetFor = null; S.resetPw = ''; S.built = false; render();
+      }, function (e) { go1.disabled = false; err.textContent = resetError(e); });
+    });
+    return h('div', { class: 'stack-s' },
+      h('label', { class: 'lbl', for: 'r-pw', text: 'Temporary password for ' + who + ' (at least 8 characters)' }),
+      input, err,
+      h('div', { class: 'row' }, go1, h('button', { type: 'button', class: 'btn', onclick: closeReset, text: 'Cancel' })));
+  }
+
   function screenPeople() {
     var box = h('div', { class: 'stack' });
+    S.built = !!(S.resetFor || S.resetDone); // keep a half-typed temporary password when live data refreshes
     box.append(h('div', { class: 'card stack-s' },
       h('h2', { text: 'People' }),
       h('p', { class: 'hint', text: 'New accounts wait here until you approve them. Approved coaches can read every record and add their own. Admins can also edit anyone’s records and build forms.' })));
@@ -374,10 +498,12 @@
           h('button', { type: 'button', class: 'btn', onclick: function () { setProfile(p, { role: p.role === 'admin' ? 'coach' : 'admin' }); }, text: p.role === 'admin' ? 'Make coach' : 'Make admin' }),
           h('button', { type: 'button', class: 'btn danger', onclick: function () { setProfile(p, { approved: false }); }, text: 'Remove access' }));
       }
+      if (!me) actions.append(h('button', { type: 'button', class: 'btn', onclick: function () { openReset(p); }, text: 'Reset password' }));
       box.append(h('div', { class: 'card stack-s' },
         h('div', {}, h('div', { class: 'rec-t', text: p.name || p.email || 'Unnamed' }), h('div', { class: 'rec-s', text: p.email || '' })),
         h('div', { class: 'fc-count', text: status + (me ? ' (you)' : '') }),
-        actions.childNodes.length ? actions : null));
+        actions.childNodes.length ? actions : null,
+        resetPanel(p)));
     });
     return box;
   }
@@ -1033,6 +1159,7 @@
     S.tab = 'forms'; S.screen = null; S.values = {}; S.built = false; S.saving = false;
     S.data = {}; S.idx = {}; S.loaded = {}; S.subs = {}; S.subErr = {}; S.names = {}; S.custom = []; S.formsCache = null;
     S.filter = ''; S.slow = false; S.people = null; S.peopleLoading = false;
+    S.resetFor = null; S.resetPw = ''; S.resetDone = null;
   }
   function loadProfile(session) {
     S.auth = 'loading'; S.loadingFor = session.user.id; render();

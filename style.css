@@ -114,3 +114,11 @@ textarea{min-height:92px;resize:vertical}
 
 .who{display:flex;gap:12px;align-items:baseline}
 .linkbtn{appearance:none;border:0;background:transparent;color:var(--board-ink);font:600 13px var(--body);text-decoration:underline;text-underline-offset:3px;padding:8px 0;cursor:pointer;min-height:36px}
+
+.pwrow{display:flex;gap:8px;align-items:stretch}
+.pwrow .inp{flex:1;min-width:0}
+.pwshow{min-width:72px;padding:10px 12px}
+.forgot{font-size:14px;color:var(--muted)}
+.forgot summary{cursor:pointer;min-height:44px;display:flex;align-items:center;text-decoration:underline;text-underline-offset:3px;color:var(--ink)}
+.forgot p{margin:0 0 6px}
+.temp-pw{font:700 20px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.04em;user-select:all;margin:6px 0;word-break:break-all}

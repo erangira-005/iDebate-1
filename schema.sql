@@ -240,6 +240,44 @@ end
 $$;
 
 
+-- 7b. Admin password reset ---------------------------------------------------------
+-- A page in the browser cannot set someone else's password, and Supabase's own reset emails
+-- only reach addresses on your Supabase team unless you set up your own email service.
+-- So an admin can set a temporary password here (People tab > Reset password) and the person
+-- changes it after signing in (Password at the top of the app).
+
+create extension if not exists pgcrypto with schema extensions;
+
+create or replace function public.admin_set_password(target uuid, new_password text)
+returns void
+language plpgsql
+security definer
+set search_path = public, extensions, auth
+as $$
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can reset passwords' using errcode = '42501';
+  end if;
+  if target = auth.uid() then
+    raise exception 'Use Password at the top of the app to change your own password' using errcode = '22023';
+  end if;
+  if new_password is null or length(new_password) < 8 then
+    raise exception 'The password must be at least 8 characters' using errcode = '22023';
+  end if;
+  update auth.users
+     set encrypted_password = crypt(new_password, gen_salt('bf', 10)),
+         updated_at = now()
+   where id = target;
+  if not found then
+    raise exception 'No such account' using errcode = 'P0002';
+  end if;
+end;
+$$;
+
+revoke all on function public.admin_set_password(uuid, text) from public, anon, authenticated;
+grant execute on function public.admin_set_password(uuid, text) to authenticated;
+
+
 -- 8. Analysis views ----------------------------------------------------------------------
 -- Ordinary tables built from the JSON, one row per school, student, session and so on.
 -- They follow the same access rules as the records they read (security_invoker).
