@@ -14,8 +14,20 @@
   var lib = window.supabase;
   var configured = /^https:\/\/[^ ]+$/.test(url) && key.length > 20 && !/YOUR_/.test(url + key) && !!(lib && lib.createClient);
   var sb = configured
-    ? lib.createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } })
+    ? lib.createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } })
     : null;
+
+  // Coming back from Google, a failure is reported in the page address. Read it once, before the
+  // library tidies the address, and remove it so a refresh does not show it again.
+  var urlErr = (function () {
+    try {
+      var src = String(window.location.hash || '').replace(/^#/, '') + '&' + String(window.location.search || '').replace(/^\?/, '');
+      var p = new URLSearchParams(src);
+      var m = p.get('error_description') || p.get('error');
+      if (m) window.history.replaceState(null, '', window.location.pathname);
+      return m || null;
+    } catch (e) { return null; }
+  })();
 
   function uuid() {
     if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
@@ -199,6 +211,11 @@
       });
   }
   function signOut() { return sb.auth.signOut(); }
+  // Sends the browser to Google, which sends it back here signed in (needs the setup in the README).
+  function signInWithGoogle() {
+    return sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin + window.location.pathname } })
+      .then(function (r) { return { error: r.error ? r.error.message : null }; });
+  }
   // Signed-in person chooses a new password for themselves.
   function changePassword(password) {
     return sb.auth.updateUser({ password: password })
@@ -212,6 +229,9 @@
 
   window.Backend = configured ? {
     configured: true,
+    googleSignIn: cfg.googleSignIn === true,
+    signInWithGoogle: signInWithGoogle,
+    urlError: function () { var e = urlErr; urlErr = null; return e; },
     onAuth: onAuth, getSession: getSession, signIn: signIn, signUp: signUp, signOut: signOut,
     me: me, profiles: profiles, listProfiles: listProfiles, updateProfile: updateProfile,
     changePassword: changePassword, setPassword: setPassword,

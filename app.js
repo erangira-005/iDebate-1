@@ -318,6 +318,8 @@
     if (/email not confirmed/i.test(m)) return 'This account’s email has not been confirmed, so it cannot sign in yet. Ask your admin for help (README, step 2).';
     if (/already registered|already been registered/i.test(m)) return 'That email already has an account. Tap “I already have an account” to sign in, or ask your admin to reset the password.';
     if (/rate limit|too many/i.test(m)) return 'Too many attempts. Wait a few minutes and try again.';
+    if (/access_denied|cancel/i.test(m)) return 'Google sign-in was cancelled. Try again, or use your email and password.';
+    if (/provider is not enabled|unsupported provider|redirect_uri|redirect url|exchange external code/i.test(m)) return 'Google sign-in is not fully set up yet. Ask your admin to finish the Google setup (README, \u201cGoogle sign-in\u201d), or use your email and password.';
     if (/not authorized|error sending|sending .*email/i.test(m)) return 'The confirmation email could not be sent. Ask your admin to turn off “Confirm email” in Supabase (README, step 2).';
     return m || 'Something went wrong. Try again.';
   }
@@ -364,6 +366,18 @@
         }
       }, function () { go1.disabled = false; msg.textContent = 'Could not reach the server. Check your connection and try again.'; });
     });
+    var google = null;
+    if (Backend.googleSignIn && Backend.signInWithGoogle) {
+      var gbtn = h('button', { type: 'button', class: 'btn google', id: 'a-google', text: 'Continue with Google' });
+      gbtn.addEventListener('click', function () {
+        gbtn.disabled = true; msg.textContent = '';
+        Promise.resolve(Backend.signInWithGoogle()).then(function (res) {
+          // On success the browser is already on its way to Google.
+          if (res && res.error) { gbtn.disabled = false; S.authMsg = friendlyAuthError(res.error); msg.textContent = S.authMsg; }
+        }, function () { gbtn.disabled = false; msg.textContent = 'Could not reach the server. Check your connection and try again.'; });
+      });
+      google = h('div', { class: 'stack-s' }, gbtn, h('div', { class: 'or', text: signup ? 'or create an account with an email address' : 'or use an email address' }));
+    }
     var toggle = h('button', { type: 'button', class: 'btn', onclick: function () { S.authMode = signup ? 'in' : 'up'; S.authMsg = ''; render(); }, text: signup ? 'I already have an account' : 'Create an account' });
     var forgot = signup ? null : h('details', { class: 'forgot' },
       h('summary', { text: 'Forgot your password?' }),
@@ -372,7 +386,7 @@
       h('div', { class: 'card stack-s' },
         h('h2', { text: signup ? 'Create your account' : 'Sign in' }),
         h('p', { class: 'hint', text: signup ? 'An admin has to approve new accounts before you can see or add records.' : 'Use the email and password you registered with.' }),
-        form, forgot),
+        google, form, forgot),
       toggle);
   }
 
@@ -1270,6 +1284,8 @@
     S.authMsg = '';
     loadProfile(session);
   }
+  // A failed return from Google leaves its reason in the page address; show it on the sign-in screen.
+  if (Backend.urlError) { var urlMsg = Backend.urlError(); if (urlMsg) S.authMsg = friendlyAuthError(urlMsg); }
   render();
   if (Backend.configured) Backend.onAuth(handleSession);
 })();

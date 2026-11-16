@@ -249,7 +249,7 @@ begin
   values (
     new.id,
     new.email,
-    coalesce(nullif(trim(new.raw_user_meta_data ->> 'name'), ''), split_part(new.email, '@', 1)),
+    coalesce(nullif(trim(new.raw_user_meta_data ->> 'name'), ''), nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''), split_part(new.email, '@', 1)),
     case when first_user then 'admin' else 'coach' end,
     first_user
   )
